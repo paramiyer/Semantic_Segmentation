@@ -1,174 +1,104 @@
-# This file is dual licensed under the terms of the Apache License, Version
-# 2.0, and the BSD License. See the LICENSE file in the root of this repository
-# for complete details.
-
-from __future__ import annotations
-
-import re
-from typing import NewType, Tuple, Union, cast
-
-from .tags import Tag, parse_tag
-from .version import InvalidVersion, Version
-
-BuildTag = Union[Tuple[()], Tuple[int, str]]
-NormalizedName = NewType("NormalizedName", str)
+import os
+import random
+import ast
+import shutil
+import ast
+import cv2
+import numpy as np
 
 
-class InvalidName(ValueError):
+def file_name_extract(img_path):
+    '''Returned all files in img_path loc'''
+    file_list = os.listdir(img_path)
+    file_list = [file for file in file_list if not file.startswith('.')]
+    file_list = [i.split('.')[0] for i in file_list]
+    return(file_list)
+
+def copy_files(src, sink, files,img_type):
+    '''Copies files from src to sink of img_type
+    
+    Params:
+    src - valid dir_type string, source loc of the files
+    sink - valid dir_type string, final destination of files
+    files - list of files to be copied
+    img_type - string extention
+    
+    Outputs:
+    NA - helper file to move files
+    '''
+    for file in files:
+        src_file = os.path.join(src,(file + img_type))
+        sink_file = os.path.join(sink,(file + img_type))
+        shutil.copyfile(src_file,sink_file )
+        
+def create_mask_files(img_tag_path, dest, files, img_type, file_type, pixel_x = 1280, pixel_y = 1280, rgb = True):
+    """ Copies files from src to sink of img_type
+    
+    Params:
+    img_tag_path - valid dir_type string, source loc of tag txt files
+    dest - desired destination folder of the mask file
+    files - list of files to be converted to mask images
+    img_type - string extention of text files
+    file_type - string extention of seg files 
+    pixel_x - resolution x of tag files, default 1280
+    pixel_y - resolution y of tag files, default 1280
+    rgb - if true number of channels set to 3 else 1, default value set to 3
+    
+    Outputs:
+    NA - helper file to generate file types
     """
-    An invalid distribution name; users should refer to the packaging user guide.
-    """
-
-
-class InvalidWheelFilename(ValueError):
-    """
-    An invalid wheel filename was found, users should refer to PEP 427.
-    """
-
-
-class InvalidSdistFilename(ValueError):
-    """
-    An invalid sdist filename was found, users should refer to the packaging user guide.
-    """
-
-
-# Core metadata spec for `Name`
-_validate_regex = re.compile(
-    r"^([A-Z0-9]|[A-Z0-9][A-Z0-9._-]*[A-Z0-9])$", re.IGNORECASE
-)
-_canonicalize_regex = re.compile(r"[-_.]+")
-_normalized_regex = re.compile(r"^([a-z0-9]|[a-z0-9]([a-z0-9-](?!--))*[a-z0-9])$")
-# PEP 427: The build number must start with a digit.
-_build_tag_regex = re.compile(r"(\d+)(.*)")
-
-
-def canonicalize_name(name: str, *, validate: bool = False) -> NormalizedName:
-    if validate and not _validate_regex.match(name):
-        raise InvalidName(f"name is invalid: {name!r}")
-    # This is taken from PEP 503.
-    value = _canonicalize_regex.sub("-", name).lower()
-    return cast(NormalizedName, value)
-
-
-def is_normalized_name(name: str) -> bool:
-    return _normalized_regex.match(name) is not None
-
-
-def canonicalize_version(
-    version: Version | str, *, strip_trailing_zero: bool = True
-) -> str:
-    """
-    This is very similar to Version.__str__, but has one subtle difference
-    with the way it handles the release segment.
-    """
-    if isinstance(version, str):
-        try:
-            parsed = Version(version)
-        except InvalidVersion:
-            # Legacy versions cannot be normalized
-            return version
+    if rgb :
+        channels = 3
     else:
-        parsed = version
+        channels = 1
 
-    parts = []
+    
+    for file in files:
+        seg_img = np.zeros((pixel_x,pixel_y,channels))
+        
+        src_file = os.path.join(img_tag_path,(file+file_type))
+        #print(src_file)
+        sink_file = os.path.join(dest,(file+img_type))
+        with open(src_file) as f:
+            content = f.readlines()
+        content = [x.strip() for x in content]
+        content = [ast.literal_eval(x) for x in content]
+        
+        #print(content)
+        for i in range(len(content)):
+            contour = np.array(content[i])
+            #print(contour)
+            cv2.fillPoly(seg_img, pts =[contour],color = (0,255,0))
 
-    # Epoch
-    if parsed.epoch != 0:
-        parts.append(f"{parsed.epoch}!")
+        seg_img = np.array(seg_img, np.uint8)
+        cv2.imwrite(sink_file, seg_img)
+        
+def test_file_names(loc_img, loc_seg):
+    '''Unit test to check if same files are there in loc_img, loc_seg
+    Params:
+    loc_img - location of images
+    loc_seg - location of tags
+    
+    Outputs:
+    result: str, 'Pass' or 'Fail' indicating status of test
+    
+    '''
 
-    # Release segment
-    release_segment = ".".join(str(x) for x in parsed.release)
-    if strip_trailing_zero:
-        # NB: This strips trailing '.0's to normalize
-        release_segment = re.sub(r"(\.0)+$", "", release_segment)
-    parts.append(release_segment)
-
-    # Pre-release
-    if parsed.pre is not None:
-        parts.append("".join(str(x) for x in parsed.pre))
-
-    # Post-release
-    if parsed.post is not None:
-        parts.append(f".post{parsed.post}")
-
-    # Development release
-    if parsed.dev is not None:
-        parts.append(f".dev{parsed.dev}")
-
-    # Local version segment
-    if parsed.local is not None:
-        parts.append(f"+{parsed.local}")
-
-    return "".join(parts)
+    file_images = os.listdir(loc_img)
+    file_images = [file for file in file_images if not file.startswith('.')]
 
 
-def parse_wheel_filename(
-    filename: str,
-) -> tuple[NormalizedName, Version, BuildTag, frozenset[Tag]]:
-    if not filename.endswith(".whl"):
-        raise InvalidWheelFilename(
-            f"Invalid wheel filename (extension must be '.whl'): {filename}"
-        )
+    file_seg = os.listdir(loc_seg)
+    file_seg = [file for file in file_seg if not file.startswith('.')]
 
-    filename = filename[:-4]
-    dashes = filename.count("-")
-    if dashes not in (4, 5):
-        raise InvalidWheelFilename(
-            f"Invalid wheel filename (wrong number of parts): {filename}"
-        )
+    m_set=set(file_images)
+    A = all(x in m_set  for x in file_seg)
 
-    parts = filename.split("-", dashes - 2)
-    name_part = parts[0]
-    # See PEP 427 for the rules on escaping the project name.
-    if "__" in name_part or re.match(r"^[\w\d._]*$", name_part, re.UNICODE) is None:
-        raise InvalidWheelFilename(f"Invalid project name: {filename}")
-    name = canonicalize_name(name_part)
-
-    try:
-        version = Version(parts[1])
-    except InvalidVersion as e:
-        raise InvalidWheelFilename(
-            f"Invalid wheel filename (invalid version): {filename}"
-        ) from e
-
-    if dashes == 5:
-        build_part = parts[2]
-        build_match = _build_tag_regex.match(build_part)
-        if build_match is None:
-            raise InvalidWheelFilename(
-                f"Invalid build number: {build_part} in '{filename}'"
-            )
-        build = cast(BuildTag, (int(build_match.group(1)), build_match.group(2)))
+    m_set=set(file_seg)
+    B = all(x in m_set  for x in file_images)
+    
+    result = A & B
+    if result:
+        return('Pass')
     else:
-        build = ()
-    tags = parse_tag(parts[-1])
-    return (name, version, build, tags)
-
-
-def parse_sdist_filename(filename: str) -> tuple[NormalizedName, Version]:
-    if filename.endswith(".tar.gz"):
-        file_stem = filename[: -len(".tar.gz")]
-    elif filename.endswith(".zip"):
-        file_stem = filename[: -len(".zip")]
-    else:
-        raise InvalidSdistFilename(
-            f"Invalid sdist filename (extension must be '.tar.gz' or '.zip'):"
-            f" {filename}"
-        )
-
-    # We are requiring a PEP 440 version, which cannot contain dashes,
-    # so we split on the last dash.
-    name_part, sep, version_part = file_stem.rpartition("-")
-    if not sep:
-        raise InvalidSdistFilename(f"Invalid sdist filename: {filename}")
-
-    name = canonicalize_name(name_part)
-
-    try:
-        version = Version(version_part)
-    except InvalidVersion as e:
-        raise InvalidSdistFilename(
-            f"Invalid sdist filename (invalid version): {filename}"
-        ) from e
-
-    return (name, version)
+        return('Fail')
